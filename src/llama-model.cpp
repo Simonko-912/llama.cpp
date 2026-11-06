@@ -2064,7 +2064,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                 }
             }
             // lock the buffers that hold the tensors: a multi_buffer has no base, and its parts are pageable memory when pinning fails
-            // the nullptr guard keeps the dry-run dummy-buffer path out of mlock
+            // the per-buffer get_base() guard keeps the dry-run dummy-buffer path out of mlock
             if (use_mlock && buf != nullptr && !ml.no_alloc && ggml_backend_buffer_is_host(buf)) {
                 std::vector<ggml_backend_buffer_t> lock_bufs;
                 for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
@@ -2073,6 +2073,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                     }
                 }
                 for (ggml_backend_buffer_t lock_buf : lock_bufs) {
+                    if (ggml_backend_buffer_get_base(lock_buf) == nullptr) {
+                        continue; // no base to lock (dry-run placeholder)
+                    }
                     pimpl->mlock_bufs.emplace_back(new llama_mlock);
                     auto & mlock_buf = pimpl->mlock_bufs.back();
                     mlock_buf->init   (ggml_backend_buffer_get_base(lock_buf));
@@ -2086,7 +2089,11 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         buf_ptrs.reserve(bufs.size());
 
         for (auto & buf : bufs) {
-            if(!getenv("DRYRUN")) {
+            if (buf == nullptr) {
+                continue; // dry-run placeholders are not real allocations
+            }
+
+            if (!getenv("DRYRUN")) {
                 // indicate that this buffer contains weights
                 // this is used by ggml_backend_sched to improve op scheduling: ops that use a weight are preferably scheduled to the backend that contains the weight
                 ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
@@ -2134,14 +2141,17 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     if (!ml.use_mmap) {
         std::stable_partition(ctx_bufs.begin(), ctx_bufs.end(), [](const auto & x) {
             const auto & bufs = x.second;
-            return !bufs.empty() && bufs[0] != nullptr && !ggml_backend_buffer_is_host(bufs[0]);
+            ggml_backend_buffer_t buf = bufs.empty() ? nullptr : bufs[0];
+            return buf != nullptr && !ggml_backend_buffer_is_host(buf);
         });
     }
 
     // load tensor data
-    for (auto & [ctx, bufs] : ctx_bufs) {
-        if (!ml.load_all_data(ctx, bufs, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
-            return false;
+    if (!getenv("DRYRUN")) {
+        for (auto & [ctx, bufs] : ctx_bufs) {
+            if (!ml.load_all_data(ctx, bufs, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+                return false;
+            }
         }
     }
 
