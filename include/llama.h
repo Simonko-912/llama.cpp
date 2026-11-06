@@ -158,6 +158,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_F8_E4M3       = 42, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
         LLAMA_FTYPE_GUESSED_MOSTLY_SORUCE = 1025, // not specified in the model file
@@ -406,7 +407,7 @@ extern "C" {
         void *              abort_callback_data;
 
         // Keep the booleans together and at the end of the struct to avoid misalignment during copy-by-value.
-        bool embeddings;  // if true, extract embeddings (together with logits)
+        bool embeddings;  // if true, extract embeddings (together with logits, except for a pooling type other than NONE)
         bool offload_kqv; // offload the KQV ops (including the KV cache) to GPU
         bool no_perf;     // measure performance timings
         bool op_offload;  // offload host tensor operations to device
@@ -1057,7 +1058,8 @@ extern "C" {
     // "state" here means extra hidden state carried over from a previous stage, e.g.:
     //   - MTP: state from N layers of the target model
     //   - Qwen3 VL (deepstack): state from N layers of the vision encoder
-    // Returns false if the context does not take a state embedding (currently only MTP contexts do)
+    //   - LiliCorr: context embeddings for the transformers
+    // Returns false if the context does not take a state embedding (MTP and LiliCorr contexts do)
     LLAMA_API bool llama_batch_ext_set_embd_state(
                                 struct llama_batch_ext * batch,
                                                int32_t   idx,
@@ -1563,6 +1565,10 @@ extern "C" {
                                float   penalty_repeat,   // must be > 0.0, 1.0 = disabled
                                float   penalty_freq,     // must be finite, 0.0 = disabled
                                float   penalty_present); // must be finite, 0.0 = disabled
+
+    /// maximum number of distinct DRY sequence breakers, duplicates not counted
+    /// processing each breaker scans the entire vocabulary, so the init cost is O(num_breakers x n_vocab)
+    #define LLAMA_DRY_MAX_SEQ_BREAKERS 64
 
     ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
     LLAMA_API struct llama_sampler * llama_sampler_init_dry(
